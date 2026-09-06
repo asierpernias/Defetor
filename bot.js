@@ -9,12 +9,12 @@ export default function bot({memory, history}){
             },
             markov2: {},
             patBuf: [],
-            consecutiveD: 0
+            consecutiveD: 0,
+            recentModel: {C: {C: 1, D: 1}, D: {C:1, D: 1}},
+            recentWindow: 0,
         };
 
         let move = "C";
-
-        // Keep a count of the moves and update the memory counter
 
         const lastMove = history.at(-1)?.opponent;
 
@@ -30,25 +30,34 @@ export default function bot({memory, history}){
 
         memory.rounds = memory.cooperations + memory.defections;
 
-
-        // Calculate defect rate in diffferent windows 
-
-        function defectRate(history, n){
+        // defect rate con decay exponencial
+        function defectRate(history, n, decay = 0.85){
             const recent = history.slice(-n);
-            if (recent.length === 0) return 0
-
-            return recent.filter(x => x.opponent === "D").length / recent.length;
+            if (recent.length === 0) return 0;
+            let weight = 1, totalW = 0, defW = 0;
+            for (let i = recent.length -1; i >= 0; i--){
+                if (recent[i].opponent === "D") defW += weight;
+                totalW += weight;
+                weight *= decay;
+            }
+            return defW / totalW
         }
 
-        const d5 = defectRate(history, 5);
-        const d10 = defectRate(history, 10);
-        const d30 = defectRate(history, 30)
+        const d5  = defectRate(history, 5,  0.80);
+        const d10 = defectRate(history, 10, 0.85);
+        const d30 = defectRate(history, 30, 0.90);
 
         const alwaysD = memory.defections >= 5 && memory.cooperations === 0;
 
         const previous = history.at(-1);
         if (previous){
             memory.model[previous.you][previous.opponent]++;
+            memory.recentModel[previous.you][previous.opponent]++;
+            memory.recentWindow++;
+            if (memory.recentWindow >= 20){
+                memory.recentModel = {C: {C: 1, D: 1}, D: {C: 1, D: 1}};
+                memory.recentWindow = 0;
+            }
         }
 
         const longCooperation = memory.cooperations >= 10 && memory.defections === 0;
@@ -57,16 +66,17 @@ export default function bot({memory, history}){
 
         const mutualDefection = previous && previous.you === "D" && previous.opponent === "D";
 
-        // Probability
-
         function probDefect(model, ourMove){
             const data = model[ourMove];
-
             return data.D / (data.C + data.D)
         }
 
-        const pDifC = probDefect(memory.model, "C");
-        const pDifD = probDefect(memory.model, "D")
+        const recentSamples = memory.recentModel.C.C + memory.recentModel.C.D +
+                              memory.recentModel.D.C + memory.recentModel.D.D - 4;
+        const recentW = Math.min(recentSamples / 10, 0.7);
+
+        const pDifC = recentW * probDefect(memory.recentModel, "C") + (1 - recentW) * probDefect(memory.model, "C");
+        const pDifD = recentW * probDefect(memory.recentModel, "D") + (1 - recentW) * probDefect(memory.model, "D");
 
         const cSamples = memory.model.C.C + memory.model.C.D - 2;
         const dSamples = memory.model.D.C + memory.model.D.D - 2;
@@ -76,25 +86,29 @@ export default function bot({memory, history}){
 
         if (previous && history.at(-2)){
             const key = `${history.at(-2).you}${history.at(-2).opponent}`;
-            memory.markov2[key] ??= { C: 2, D: 2};  
+            memory.markov2[key] ??= { C: 1, D: 1};  
             memory.markov2[key][previous.opponent]++;
         }
 
         const m2key = previous ? `${previous.you}${previous.opponent}` : null;
         const m2data = m2key ? memory.markov2[m2key] : null;
-        const mpred = m2data && (m2data.C + m2data.D) > 6
+        const mpred = m2data && (m2data.C + m2data.D) > 3
             ? m2data.D / (m2data.C + m2data.D)
             : null;
 
+        const markovWeight = mpred !== null ? Math.min(0.25 + history.length / 200, 0.5) : 0;
         const prediction = mpred !== null   
-            ? 0.4 * mpred + 0.35 * d5 + 0.25 * d10
+            ? markovWeight * mpred + (1 - markovWeight) * (0.6 * d5 + 0.4 * d10)
             : 0.5 * d5 + 0.3 * d10 + 0.2 * d30;
 
         function detectPeriod() {
             const buf = memory.patBuf;
             for (let p = 2; p <= 5; p++){
-                if (buf.length < p * 2) continue;
-                if (buf.slice(-p).join("") === buf.slice(-p*2, -p).join("")){
+                if (buf.length < p * 3) continue;
+                const last   = buf.slice(-p).join("");
+                const prev   = buf.slice(-p*2, -p).join("");
+                const before = buf.slice(-p*3, -p*2).join("");
+                if (last === prev && prev === before){
                     return buf.slice(-p);
                 }
             }
@@ -103,12 +117,12 @@ export default function bot({memory, history}){
 
         const period = detectPeriod();
         if (period){
-            move = period[history.length % period.length] === "D" ? "D" : "C"
+            move = period.includes("D") ? "D" : "C";
             return [move, memory];
         }
+
         if (previous?.opponent === "D" && previous.you === "D") memory.consecutiveD = (memory.consecutiveD ?? 0) + 1;
         else memory.consecutiveD = 0;
-
 
         // Detect  pattern tit for tat
 
@@ -140,6 +154,9 @@ export default function bot({memory, history}){
 
         // Logic of answer
 
+        const volativity = Math.abs(d5 - d10);
+        const threshold = 0.55 + 0.15 * (1 - volativity);
+
         if (cSamples < 2 && dSamples < 2){
             move = "C";
         } else if (alwaysD){
@@ -148,7 +165,7 @@ export default function bot({memory, history}){
             move = "C"
         } else if (unprovokedDefection && pDifC > 0.65 && cSamples >= 3){
             move = "D";
-        } else if (prediction > 0.65 && history.length >= 5 && !mutualDefection){
+        } else if (prediction > threshold && history.length >= 5 && !mutualDefection){
             move = "D";
         } else if (expectedD > expectedC && dSamples >= 3 && !mutualDefection){
             move = "D";
