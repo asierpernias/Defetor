@@ -1,5 +1,5 @@
 # Adaptative bot
-A bot designed to play an iterated version of the Prisoner's Dilemma. This was made for a YSWS from Hackclub called (Defector)[https://defector.hackclub.com/home]. It combines pattern detection, probabilistic modeling and several classic heuristics (TFT, Generous Tit-for-Tat, punishment for unprovoked defection, etc) to decide whether to cooperate or defect each round.
+A bot designed to play an iterated version of the Prisoner's Dilemma. This was made for a YSWS from Hackclub called [Defector](https://defector.hackclub.com/home). It combines pattern detection, probabilistic modeling and several classic heuristics (TFT, Generous Tit-for-Tat, punishment for unprovoked defection, etc) to decide whether to cooperate or defect each round.
 
 ## Signature
 
